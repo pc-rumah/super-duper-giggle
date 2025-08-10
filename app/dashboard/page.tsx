@@ -1,4 +1,6 @@
 "use client"
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -14,24 +16,50 @@ import {
   Target,
 } from "lucide-react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
 import { getCurrentUser, logout, canEdit } from "@/lib/auth"
-import { useEffect, useState } from "react"
+import { supabase } from "@/lib/supabase"
 import { UserInfo } from "@/components/user-info"
 import { ParentChecklist } from "@/components/parent-checklist"
 
 export default function Dashboard() {
   const router = useRouter()
   const [user, setUser] = useState<any>(null)
+  const [stats, setStats] = useState({
+    totalStudents: 0,
+    totalSubjects: 0,
+    totalClasses: 0,
+  })
 
   useEffect(() => {
-    const currentUser = getCurrentUser()
-    if (!currentUser) {
-      router.push("/")
-      return
+    const initializeUser = async () => {
+      const currentUser = await getCurrentUser()
+      if (!currentUser) {
+        router.push("/")
+        return
+      }
+      setUser(currentUser)
+      await loadStats()
     }
-    setUser(currentUser)
+    
+    initializeUser()
   }, [router])
+
+  const loadStats = async () => {
+    try {
+      const [studentsResult, subjectsResult] = await Promise.all([
+        supabase.from('students').select('id', { count: 'exact' }),
+        supabase.from('subjects').select('id', { count: 'exact' })
+      ])
+
+      setStats({
+        totalStudents: studentsResult.count || 0,
+        totalSubjects: subjectsResult.count || 0,
+        totalClasses: 15, // Static for now
+      })
+    } catch (error) {
+      console.error('Error loading stats:', error)
+    }
+  }
 
   const handleLogout = () => {
     logout()
@@ -177,7 +205,7 @@ export default function Dashboard() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-gray-600">Total Siswa</p>
-                    <p className="text-2xl font-bold text-gray-900">450</p>
+                    <p className="text-2xl font-bold text-gray-900">{stats.totalStudents}</p>
                   </div>
                   <Users className="h-8 w-8 text-blue-600" />
                 </div>
@@ -189,7 +217,7 @@ export default function Dashboard() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-gray-600">Mata Pelajaran</p>
-                    <p className="text-2xl font-bold text-gray-900">12</p>
+                    <p className="text-2xl font-bold text-gray-900">{stats.totalSubjects}</p>
                   </div>
                   <BookOpen className="h-8 w-8 text-green-600" />
                 </div>
@@ -201,7 +229,7 @@ export default function Dashboard() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-gray-600">Kelas</p>
-                    <p className="text-2xl font-bold text-gray-900">15</p>
+                    <p className="text-2xl font-bold text-gray-900">{stats.totalClasses}</p>
                   </div>
                   <GraduationCap className="h-8 w-8 text-purple-600" />
                 </div>

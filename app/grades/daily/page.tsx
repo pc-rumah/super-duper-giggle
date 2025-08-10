@@ -8,16 +8,43 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
 import { GraduationCap, ArrowLeft, Search, Printer, Plus, Check } from "lucide-react"
 import Link from "next/link"
 import { getCurrentUser, canEdit } from "@/lib/auth"
 import { useEffect } from "react"
 import { useRouter } from "next/navigation"
+import { supabase } from "@/lib/supabase"
+
+interface DailyGrade {
+  id: string
+  student_id: string
+  student_name: string
+  student_class: string
+  subject_id: string
+  subject_name: string
+  category_name: string
+  score?: number
+}
 
 export default function DailyGrades() {
   const [searchTerm, setSearchTerm] = useState("")
-  const [selectedClass, setSelectedClass] = useState("7A") // Updated default value
-  const [selectedSubject, setSelectedSubject] = useState("Matematika") // Updated default value
+  const [selectedClass, setSelectedClass] = useState("all")
+  const [selectedSubject, setSelectedSubject] = useState("all")
+  const [user, setUser] = useState<any>(null)
+  const [grades, setGrades] = useState<DailyGrade[]>([])
+  const [subjects, setSubjects] = useState<any[]>([])
+  const [classes, setClasses] = useState<string[]>([])
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
+  const [formData, setFormData] = useState({
+    student_id: "",
+    subject_id: "",
+    category_name: "",
+    score: "",
+  })
+  const router = useRouter()
+
   const [categories, setCategories] = useState([
     { id: 1, name: "Ulangan 1", active: true },
     { id: 2, name: "Ulangan 2", active: true },
@@ -26,80 +53,156 @@ export default function DailyGrades() {
     { id: 5, name: "Ulangan 5", active: false },
   ])
 
-  const students = [
-    {
-      id: 1,
-      name: "Ahmad Rizki",
-      class: "7A",
-      grades: { 1: 85, 2: 88, 3: null, 4: null, 5: null },
-      average: 86.5,
-    },
-    {
-      id: 2,
-      name: "Siti Nurhaliza",
-      class: "7A",
-      grades: { 1: 92, 2: 90, 3: null, 4: null, 5: null },
-      average: 91,
-    },
-    {
-      id: 3,
-      name: "Budi Santoso",
-      class: "7A",
-      grades: { 1: 78, 2: 82, 3: null, 4: null, 5: null },
-      average: 80,
-    },
-  ]
+  useEffect(() => {
+    const initializePage = async () => {
+      const currentUser = await getCurrentUser()
+      if (!currentUser) {
+        router.push("/")
+        return
+      }
+      setUser(currentUser)
+      await loadData()
+    }
+    
+    initializePage()
+  }, [router])
 
-  const subjects = [
-    "Matematika",
-    "Bahasa Indonesia",
-    "Bahasa Inggris",
-    "IPA",
-    "IPS",
-    "PKn",
-    "Agama",
-    "Seni Budaya",
-    "PJOK",
-    "Prakarya",
-    "TIK",
-    "Bahasa Daerah",
-  ]
+  const loadData = async () => {
+    try {
+      // Load subjects
+      const { data: subjectsData, error: subjectsError } = await supabase
+        .from('subjects')
+        .select('*')
+        .order('name')
 
-  const classes = ["7A", "7B", "7C", "8A", "8B", "8C", "9A", "9B", "9C"]
+      if (subjectsError) throw subjectsError
+      setSubjects(subjectsData || [])
+
+      // Load daily grades
+      const { data: gradesData, error: gradesError } = await supabase
+        .from('grades_daily')
+        .select(`
+          *,
+          students!inner(id, name, class),
+          subjects!inner(id, name)
+        `)
+        .order('students(name)')
+
+      if (gradesError) throw gradesError
+
+      const formattedGrades: DailyGrade[] = (gradesData || []).map((grade: any) => ({
+        id: grade.id,
+        student_id: grade.student_id,
+        student_name: grade.students.name,
+        student_class: grade.students.class,
+        subject_id: grade.subject_id,
+        subject_name: grade.subjects.name,
+        category_name: grade.category_name,
+        score: grade.score,
+      }))
+
+      setGrades(formattedGrades)
+
+      // Extract unique classes
+      const uniqueClasses = [...new Set(formattedGrades.map(g => g.student_class))].sort()
+      setClasses(uniqueClasses)
+
+    } catch (error) {
+      console.error('Error loading data:', error)
+    }
+  }
 
   const toggleCategory = (categoryId: number) => {
     setCategories((prev) => prev.map((cat) => (cat.id === categoryId ? { ...cat, active: !cat.active } : cat)))
   }
 
-  const filteredStudents = students.filter((student) => {
-    const matchesSearch = student.name.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesClass = !selectedClass || student.class === selectedClass
-    return matchesSearch && matchesClass
+  const filteredGrades = grades.filter((grade) => {
+    const matchesSearch = grade.student_name.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesClass = selectedClass === "all" || grade.student_class === selectedClass
+    const matchesSubject = selectedSubject === "all" || grade.subject_id === selectedSubject
+    return matchesSearch && matchesClass && matchesSubject
   })
+
+  const getFilteredGrades = () => {
+    if (user?.userType === "siswa") {
+      return filteredGrades.filter((grade) => grade.student_name === user.name)
+    } else if (user?.userType === "orangtua") {
+      return filteredGrades.filter((grade) => grade.student_name === user.name)
+    }
+    return filteredGrades
+  }
+
+  const handleAddGrade = async () => {
+    if (!formData.student_id || !formData.subject_id || !formData.category_name) {
+      alert("Mohon lengkapi semua field yang diperlukan")
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('grades_daily')
+        .upsert({
+          student_id: formData.student_id,
+          subject_id: formData.subject_id,
+          category_name: formData.category_name,
+          score: formData.score ? parseInt(formData.score) : null,
+        }, {
+          onConflict: 'student_id,subject_id,category_name'
+        })
+
+      if (error) throw error
+
+      await loadData()
+      setIsAddDialogOpen(false)
+      resetForm()
+      alert("Nilai berhasil disimpan!")
+    } catch (error) {
+      console.error('Error saving grade:', error)
+      alert("Gagal menyimpan nilai")
+    }
+  }
+
+  const resetForm = () => {
+    setFormData({
+      student_id: "",
+      subject_id: "",
+      category_name: "",
+      score: "",
+    })
+  }
 
   const handlePrint = () => {
     window.print()
   }
 
-  const [user, setUser] = useState<any>(null)
-  const router = useRouter()
-
-  useEffect(() => {
-    const currentUser = getCurrentUser()
-    if (!currentUser) {
-      router.push("/")
-      return
+  // Group grades by student for display
+  const groupedGrades = getFilteredGrades().reduce((acc, grade) => {
+    const key = `${grade.student_id}-${grade.subject_id}`
+    if (!acc[key]) {
+      acc[key] = {
+        student_id: grade.student_id,
+        student_name: grade.student_name,
+        student_class: grade.student_class,
+        subject_id: grade.subject_id,
+        subject_name: grade.subject_name,
+        grades: {},
+        average: 0
+      }
     }
-    setUser(currentUser)
-  }, [router])
+    acc[key].grades[grade.category_name] = grade.score
+    return acc
+  }, {} as any)
 
-  const getFilteredStudents = () => {
-    if (user?.userType === "siswa") {
-      return students.filter((student) => student.name === "Ahmad Rizki")
-    } else if (user?.userType === "orangtua") {
-      return students.filter((student) => student.name === "Ahmad Rizki")
-    }
-    return filteredStudents
+  // Calculate averages
+  Object.values(groupedGrades).forEach((student: any) => {
+    const scores = Object.values(student.grades).filter(score => score !== null && score !== undefined) as number[]
+    student.average = scores.length > 0 ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0
+  })
+
+  const displayStudents = Object.values(groupedGrades)
+
+  const getGradeForCategory = (studentGrades: any, categoryName: string) => {
+    return studentGrades[categoryName] || null
   }
 
   return (
@@ -148,7 +251,7 @@ export default function DailyGrades() {
                       <SelectValue placeholder="Semua Kelas" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="7A">Semua Kelas</SelectItem>
+                      <SelectItem value="all">Semua Kelas</SelectItem>
                       {classes.map((cls) => (
                         <SelectItem key={cls} value={cls}>
                           Kelas {cls}
@@ -163,10 +266,10 @@ export default function DailyGrades() {
                       <SelectValue placeholder="Semua Mata Pelajaran" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Matematika">Semua Mata Pelajaran</SelectItem>
+                      <SelectItem value="all">Semua Mata Pelajaran</SelectItem>
                       {subjects.map((subject) => (
-                        <SelectItem key={subject} value={subject}>
-                          {subject}
+                        <SelectItem key={subject.id} value={subject.id}>
+                          {subject.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -216,10 +319,74 @@ export default function DailyGrades() {
             <div className="flex justify-between items-center">
               <CardTitle>Daftar Nilai Ulangan Harian</CardTitle>
               {canEdit(user?.userType) && (
-                <Button className="bg-green-600 hover:bg-green-700">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Tambah Nilai
-                </Button>
+                <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button className="bg-green-600 hover:bg-green-700">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Tambah Nilai
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Tambah Nilai Ulangan Harian</DialogTitle>
+                      <DialogDescription>
+                        Masukkan nilai ulangan harian untuk siswa
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="category">Kategori Ulangan</Label>
+                        <Select value={formData.category_name} onValueChange={(value) => setFormData(prev => ({ ...prev, category_name: value }))}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Pilih kategori" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {categories.filter(cat => cat.active).map((category) => (
+                              <SelectItem key={category.id} value={category.name}>
+                                {category.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="subject">Mata Pelajaran</Label>
+                        <Select value={formData.subject_id} onValueChange={(value) => setFormData(prev => ({ ...prev, subject_id: value }))}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Pilih mata pelajaran" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {subjects.map((subject) => (
+                              <SelectItem key={subject.id} value={subject.id}>
+                                {subject.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="score">Nilai</Label>
+                        <Input
+                          id="score"
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={formData.score}
+                          onChange={(e) => setFormData(prev => ({ ...prev, score: e.target.value }))}
+                          placeholder="0-100"
+                        />
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => { setIsAddDialogOpen(false); resetForm(); }}>
+                        Batal
+                      </Button>
+                      <Button onClick={handleAddGrade} className="bg-green-600 hover:bg-green-700">
+                        Simpan
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
               )}
             </div>
           </CardHeader>
@@ -231,6 +398,7 @@ export default function DailyGrades() {
                     <TableHead>No</TableHead>
                     <TableHead>Nama Siswa</TableHead>
                     <TableHead>Kelas</TableHead>
+                    <TableHead>Mata Pelajaran</TableHead>
                     {categories
                       .filter((cat) => cat.active)
                       .map((category) => (
@@ -241,33 +409,34 @@ export default function DailyGrades() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {getFilteredStudents().map((student, index) => (
-                    <TableRow key={student.id}>
+                  {displayStudents.map((student: any, index) => (
+                    <TableRow key={`${student.student_id}-${student.subject_id}`}>
                       <TableCell>{index + 1}</TableCell>
-                      <TableCell className="font-medium">{student.name}</TableCell>
-                      <TableCell>{student.class}</TableCell>
+                      <TableCell className="font-medium">{student.student_name}</TableCell>
+                      <TableCell>{student.student_class}</TableCell>
+                      <TableCell>{student.subject_name}</TableCell>
                       {categories
                         .filter((cat) => cat.active)
                         .map((category) => (
                           <TableCell key={category.id}>
-                            {student.grades[category.id] ? (
+                            {getGradeForCategory(student.grades, category.name) ? (
                               <span
                                 className={`px-2 py-1 rounded text-sm ${
-                                  student.grades[category.id]! >= 85
+                                  getGradeForCategory(student.grades, category.name)! >= 85
                                     ? "bg-green-100 text-green-800"
-                                    : student.grades[category.id]! >= 75
+                                    : getGradeForCategory(student.grades, category.name)! >= 75
                                       ? "bg-yellow-100 text-yellow-800"
                                       : "bg-red-100 text-red-800"
                                 }`}
                               >
-                                {student.grades[category.id]}
+                                {getGradeForCategory(student.grades, category.name)}
                               </span>
                             ) : (
                               <span className="text-gray-400 text-sm">-</span>
                             )}
                           </TableCell>
                         ))}
-                      <TableCell className="font-semibold">{student.average ? student.average : "-"}</TableCell>
+                      <TableCell className="font-semibold">{student.average ? student.average.toFixed(1) : "-"}</TableCell>
                       <TableCell>
                         {canEdit(user?.userType) ? (
                           <Button variant="outline" size="sm">

@@ -6,68 +6,158 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
 import { GraduationCap, ArrowLeft, Search, Printer, Plus } from "lucide-react"
 import Link from "next/link"
 import { getCurrentUser, canEdit } from "@/lib/auth"
 import { useRouter } from "next/navigation"
+import { supabase } from "@/lib/supabase"
+
+interface StudentGrade {
+  id: string
+  student_id: string
+  student_name: string
+  student_class: string
+  subject_id: string
+  subject_name: string
+  uts_score?: number
+  uas_score?: number
+  average?: number
+}
 
 export default function UTSUASGrades() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedClass, setSelectedClass] = useState("all")
   const [selectedSubject, setSelectedSubject] = useState("all")
   const [user, setUser] = useState<any>(null)
+  const [students, setStudents] = useState<StudentGrade[]>([])
+  const [subjects, setSubjects] = useState<any[]>([])
+  const [classes, setClasses] = useState<string[]>([])
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
+  const [editingGrade, setEditingGrade] = useState<StudentGrade | null>(null)
+  const [formData, setFormData] = useState({
+    student_id: "",
+    subject_id: "",
+    uts_score: "",
+    uas_score: "",
+  })
   const router = useRouter()
 
-  const students = [
-    { id: 1, name: "Ahmad Rizki", class: "7A", uts: 85, uas: 88, average: 86.5 },
-    { id: 2, name: "Siti Nurhaliza", class: "7A", uts: 92, uas: 90, average: 91 },
-    { id: 3, name: "Budi Santoso", class: "7A", uts: 78, uas: 82, average: 80 },
-    { id: 4, name: "Dewi Sartika", class: "7B", uts: 88, uas: 85, average: 86.5 },
-    { id: 5, name: "Andi Wijaya", class: "7B", uts: 75, uas: 79, average: 77 },
-  ]
+  useEffect(() => {
+    const initializePage = async () => {
+      const currentUser = await getCurrentUser()
+      if (!currentUser) {
+        router.push("/")
+        return
+      }
+      setUser(currentUser)
+      await loadData()
+    }
+    
+    initializePage()
+  }, [router])
 
-  const subjects = [
-    "Matematika",
-    "Bahasa Indonesia",
-    "Bahasa Inggris",
-    "IPA",
-    "IPS",
-    "PKn",
-    "Agama",
-    "Seni Budaya",
-    "PJOK",
-    "Prakarya",
-    "TIK",
-    "Bahasa Daerah",
-  ]
+  const loadData = async () => {
+    try {
+      // Load subjects
+      const { data: subjectsData, error: subjectsError } = await supabase
+        .from('subjects')
+        .select('*')
+        .order('name')
 
-  const classes = ["7A", "7B", "7C", "8A", "8B", "8C", "9A", "9B", "9C"]
+      if (subjectsError) throw subjectsError
+      setSubjects(subjectsData || [])
+
+      // Load students with grades
+      const { data: gradesData, error: gradesError } = await supabase
+        .from('grades_uts_uas')
+        .select(`
+          *,
+          students!inner(id, name, class),
+          subjects!inner(id, name)
+        `)
+        .order('students(name)')
+
+      if (gradesError) throw gradesError
+
+      const formattedGrades: StudentGrade[] = (gradesData || []).map((grade: any) => ({
+        id: grade.id,
+        student_id: grade.student_id,
+        student_name: grade.students.name,
+        student_class: grade.students.class,
+        subject_id: grade.subject_id,
+        subject_name: grade.subjects.name,
+        uts_score: grade.uts_score,
+        uas_score: grade.uas_score,
+        average: grade.uts_score && grade.uas_score ? 
+          ((grade.uts_score + grade.uas_score) / 2) : undefined
+      }))
+
+      setStudents(formattedGrades)
+
+      // Extract unique classes
+      const uniqueClasses = [...new Set(formattedGrades.map(g => g.student_class))].sort()
+      setClasses(uniqueClasses)
+
+    } catch (error) {
+      console.error('Error loading data:', error)
+    }
+  }
 
   const filteredStudents = students.filter((student) => {
-    const matchesSearch = student.name.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesClass = selectedClass === "all" || student.class === selectedClass
-    return matchesSearch && matchesClass
+    const matchesSearch = student.student_name.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesClass = selectedClass === "all" || student.student_class === selectedClass
+    const matchesSubject = selectedSubject === "all" || student.subject_id === selectedSubject
+    return matchesSearch && matchesClass && matchesSubject
   })
-
-  useEffect(() => {
-    const currentUser = getCurrentUser()
-    if (!currentUser) {
-      router.push("/")
-      return
-    }
-    setUser(currentUser)
-  }, [router])
 
   const getFilteredStudents = () => {
     if (user?.userType === "siswa") {
-      // Show only current student's data
-      return students.filter((student) => student.name === "Ahmad Rizki")
+      return filteredStudents.filter((student) => student.student_name === user.name)
     } else if (user?.userType === "orangtua") {
-      // Show only their child's data
-      return students.filter((student) => student.name === "Ahmad Rizki")
+      return filteredStudents.filter((student) => student.student_name === user.name)
     }
-    // Guru and admin can see all
     return filteredStudents
+  }
+
+  const handleAddGrade = async () => {
+    if (!formData.student_id || !formData.subject_id) {
+      alert("Mohon pilih siswa dan mata pelajaran")
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('grades_uts_uas')
+        .upsert({
+          student_id: formData.student_id,
+          subject_id: formData.subject_id,
+          uts_score: formData.uts_score ? parseInt(formData.uts_score) : null,
+          uas_score: formData.uas_score ? parseInt(formData.uas_score) : null,
+        }, {
+          onConflict: 'student_id,subject_id'
+        })
+
+      if (error) throw error
+
+      await loadData()
+      setIsAddDialogOpen(false)
+      resetForm()
+      alert("Nilai berhasil disimpan!")
+    } catch (error) {
+      console.error('Error saving grade:', error)
+      alert("Gagal menyimpan nilai")
+    }
+  }
+
+  const resetForm = () => {
+    setFormData({
+      student_id: "",
+      subject_id: "",
+      uts_score: "",
+      uas_score: "",
+    })
   }
 
   const handlePrint = () => {
@@ -137,8 +227,8 @@ export default function UTSUASGrades() {
                     <SelectContent>
                       <SelectItem value="all">Semua Mata Pelajaran</SelectItem>
                       {subjects.map((subject) => (
-                        <SelectItem key={subject} value={subject}>
-                          {subject}
+                        <SelectItem key={subject.id} value={subject.id}>
+                          {subject.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -162,10 +252,84 @@ export default function UTSUASGrades() {
             <div className="flex justify-between items-center">
               <CardTitle>Daftar Nilai UTS & UAS</CardTitle>
               {canEdit(user?.userType) && (
-                <Button className="bg-green-600 hover:bg-green-700">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Tambah Nilai
-                </Button>
+                <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button className="bg-green-600 hover:bg-green-700">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Tambah Nilai
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Tambah Nilai UTS & UAS</DialogTitle>
+                      <DialogDescription>
+                        Masukkan nilai UTS dan UAS untuk siswa
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="student">Siswa</Label>
+                        <Select value={formData.student_id} onValueChange={(value) => setFormData(prev => ({ ...prev, student_id: value }))}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Pilih siswa" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {/* Load students from database */}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="subject">Mata Pelajaran</Label>
+                        <Select value={formData.subject_id} onValueChange={(value) => setFormData(prev => ({ ...prev, subject_id: value }))}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Pilih mata pelajaran" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {subjects.map((subject) => (
+                              <SelectItem key={subject.id} value={subject.id}>
+                                {subject.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="uts">Nilai UTS</Label>
+                          <Input
+                            id="uts"
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={formData.uts_score}
+                            onChange={(e) => setFormData(prev => ({ ...prev, uts_score: e.target.value }))}
+                            placeholder="0-100"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="uas">Nilai UAS</Label>
+                          <Input
+                            id="uas"
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={formData.uas_score}
+                            onChange={(e) => setFormData(prev => ({ ...prev, uas_score: e.target.value }))}
+                            placeholder="0-100"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => { setIsAddDialogOpen(false); resetForm(); }}>
+                        Batal
+                      </Button>
+                      <Button onClick={handleAddGrade} className="bg-green-600 hover:bg-green-700">
+                        Simpan
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
               )}
             </div>
           </CardHeader>
@@ -177,6 +341,7 @@ export default function UTSUASGrades() {
                     <TableHead>No</TableHead>
                     <TableHead>Nama Siswa</TableHead>
                     <TableHead>Kelas</TableHead>
+                    <TableHead>Mata Pelajaran</TableHead>
                     <TableHead>Nilai UTS</TableHead>
                     <TableHead>Nilai UAS</TableHead>
                     <TableHead>Rata-rata</TableHead>
@@ -186,48 +351,49 @@ export default function UTSUASGrades() {
                 </TableHeader>
                 <TableBody>
                   {getFilteredStudents().map((student, index) => (
-                    <TableRow key={student.id}>
+                    <TableRow key={`${student.student_id}-${student.subject_id}`}>
                       <TableCell>{index + 1}</TableCell>
-                      <TableCell className="font-medium">{student.name}</TableCell>
-                      <TableCell>{student.class}</TableCell>
+                      <TableCell className="font-medium">{student.student_name}</TableCell>
+                      <TableCell>{student.student_class}</TableCell>
+                      <TableCell>{student.subject_name}</TableCell>
                       <TableCell>
                         <span
                           className={`px-2 py-1 rounded text-sm ${
-                            student.uts >= 85
+                            (student.uts_score || 0) >= 85
                               ? "bg-green-100 text-green-800"
-                              : student.uts >= 75
+                              : (student.uts_score || 0) >= 75
                                 ? "bg-yellow-100 text-yellow-800"
                                 : "bg-red-100 text-red-800"
                           }`}
                         >
-                          {student.uts}
+                          {student.uts_score || "-"}
                         </span>
                       </TableCell>
                       <TableCell>
                         <span
                           className={`px-2 py-1 rounded text-sm ${
-                            student.uas >= 85
+                            (student.uas_score || 0) >= 85
                               ? "bg-green-100 text-green-800"
-                              : student.uas >= 75
+                              : (student.uas_score || 0) >= 75
                                 ? "bg-yellow-100 text-yellow-800"
                                 : "bg-red-100 text-red-800"
                           }`}
                         >
-                          {student.uas}
+                          {student.uas_score || "-"}
                         </span>
                       </TableCell>
-                      <TableCell className="font-semibold">{student.average}</TableCell>
+                      <TableCell className="font-semibold">{student.average?.toFixed(1) || "-"}</TableCell>
                       <TableCell>
                         <span
                           className={`px-2 py-1 rounded text-sm font-medium ${
-                            student.average >= 85
+                            (student.average || 0) >= 85
                               ? "bg-green-100 text-green-800"
-                              : student.average >= 75
+                              : (student.average || 0) >= 75
                                 ? "bg-yellow-100 text-yellow-800"
                                 : "bg-red-100 text-red-800"
                           }`}
                         >
-                          {student.average >= 85 ? "A" : student.average >= 75 ? "B" : "C"}
+                          {(student.average || 0) >= 85 ? "A" : (student.average || 0) >= 75 ? "B" : "C"}
                         </span>
                       </TableCell>
                       <TableCell>

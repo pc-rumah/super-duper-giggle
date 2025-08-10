@@ -35,6 +35,7 @@ import { GraduationCap, ArrowLeft, Search, User, Calendar, Activity, Edit, Trash
 import Link from "next/link"
 import { getCurrentUser, canEdit } from "@/lib/auth"
 import { useRouter } from "next/navigation"
+import { supabase } from "@/lib/supabase"
 
 interface Student {
   id: number
@@ -59,62 +60,9 @@ export default function StudentsPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedClass, setSelectedClass] = useState("all")
   const [user, setUser] = useState<any>(null)
-  const [students, setStudents] = useState<Student[]>([
-    {
-      id: 1,
-      name: "Ahmad Rizki",
-      class: "7A",
-      nisn: "1234567890",
-      email: "ahmad.rizki@email.com",
-      phone: "081234567890",
-      address: "Jl. Merdeka No. 123, Jakarta",
-      parentName: "Budi Santoso",
-      parentPhone: "081234567891",
-      attendance: {
-        present: 85,
-        sick: 3,
-        permission: 2,
-        absent: 1,
-      },
-      extracurricular: ["Pramuka", "Basket", "English Club"],
-    },
-    {
-      id: 2,
-      name: "Siti Nurhaliza",
-      class: "7A",
-      nisn: "1234567891",
-      email: "siti.nurhaliza@email.com",
-      phone: "081234567892",
-      address: "Jl. Sudirman No. 456, Jakarta",
-      parentName: "Andi Wijaya",
-      parentPhone: "081234567893",
-      attendance: {
-        present: 88,
-        sick: 2,
-        permission: 1,
-        absent: 0,
-      },
-      extracurricular: ["Pramuka", "Paduan Suara", "Tari"],
-    },
-    {
-      id: 3,
-      name: "Budi Santoso",
-      class: "7A",
-      nisn: "1234567892",
-      email: "budi.santoso@email.com",
-      phone: "081234567894",
-      address: "Jl. Thamrin No. 789, Jakarta",
-      parentName: "Dewi Sartika",
-      parentPhone: "081234567895",
-      attendance: {
-        present: 82,
-        sick: 4,
-        permission: 3,
-        absent: 2,
-      },
-      extracurricular: ["Pramuka", "Sepak Bola"],
-    },
-  ])
+  const [students, setStudents] = useState<Student[]>([])
+  const [classes, setClasses] = useState<string[]>([])
+  const [availableExtracurricular, setAvailableExtracurricular] = useState<string[]>([])
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
@@ -133,35 +81,90 @@ export default function StudentsPage() {
 
   const router = useRouter()
 
-  const classes = ["7A", "7B", "7C", "8A", "8B", "8C", "9A", "9B", "9C"]
-  const availableExtracurricular = [
-    "Pramuka",
-    "Basket",
-    "Sepak Bola",
-    "Voli",
-    "Badminton",
-    "Tenis Meja",
-    "English Club",
-    "Paduan Suara",
-    "Tari",
-    "Teater",
-    "Robotika",
-    "Komputer",
-    "Seni Lukis",
-    "Fotografi",
-    "Jurnalistik",
-    "PMR",
-    "Paskibra",
-  ]
-
   useEffect(() => {
-    const currentUser = getCurrentUser()
-    if (!currentUser) {
-      router.push("/")
-      return
+    const initializePage = async () => {
+      const currentUser = await getCurrentUser()
+      if (!currentUser) {
+        router.push("/")
+        return
+      }
+      setUser(currentUser)
+      await loadData()
     }
-    setUser(currentUser)
+    
+    initializePage()
   }, [router])
+
+  const loadData = async () => {
+    try {
+      // Load students with attendance and extracurricular data
+      const { data: studentsData, error: studentsError } = await supabase
+        .from('students')
+        .select(`
+          *,
+          users!students_parent_user_id_fkey(name),
+          student_extracurricular(
+            extracurricular_activities(name)
+          )
+        `)
+        .order('name')
+
+      if (studentsError) throw studentsError
+
+      // Load attendance data for each student
+      const studentsWithAttendance = await Promise.all(
+        (studentsData || []).map(async (student: any) => {
+          const { data: attendanceData } = await supabase
+            .from('attendance')
+            .select('status')
+            .eq('student_id', student.id)
+
+          const attendance = {
+            present: attendanceData?.filter(a => a.status === 'present').length || 0,
+            sick: attendanceData?.filter(a => a.status === 'sick').length || 0,
+            permission: attendanceData?.filter(a => a.status === 'permission').length || 0,
+            absent: attendanceData?.filter(a => a.status === 'absent').length || 0,
+          }
+
+          const extracurricular = student.student_extracurricular?.map((se: any) => 
+            se.extracurricular_activities.name
+          ) || []
+
+          return {
+            id: student.id,
+            name: student.name,
+            class: student.class,
+            nisn: student.nisn,
+            email: student.email,
+            phone: student.phone,
+            address: student.address,
+            parentName: student.users?.name,
+            parentPhone: "", // Not stored in current schema
+            attendance,
+            extracurricular,
+          }
+        })
+      )
+
+      setStudents(studentsWithAttendance)
+
+      // Extract unique classes
+      const uniqueClasses = [...new Set(studentsWithAttendance.map(s => s.class))].sort()
+      setClasses(uniqueClasses)
+
+      // Load available extracurricular activities
+      const { data: activitiesData, error: activitiesError } = await supabase
+        .from('extracurricular_activities')
+        .select('name')
+        .order('name')
+
+      if (activitiesError) throw activitiesError
+      setAvailableExtracurricular(activitiesData?.map(a => a.name) || [])
+
+    } catch (error) {
+      console.error('Error loading data:', error)
+    }
+  }
 
   const filteredStudents = students.filter((student) => {
     const matchesSearch =
@@ -172,9 +175,9 @@ export default function StudentsPage() {
 
   const getFilteredStudents = () => {
     if (user?.userType === "siswa") {
-      return students.filter((student) => student.name === "Ahmad Rizki")
+      return students.filter((student) => student.name === user.name)
     } else if (user?.userType === "orangtua") {
-      return students.filter((student) => student.name === "Ahmad Rizki")
+      return students.filter((student) => student.name === user.name)
     }
     return filteredStudents
   }
@@ -198,35 +201,56 @@ export default function StudentsPage() {
     })
   }
 
-  const handleAddStudent = () => {
+  const handleAddStudent = async () => {
     if (!formData.name || !formData.class || !formData.nisn) {
       alert("Mohon lengkapi data wajib (Nama, Kelas, NISN)")
       return
     }
 
-    const newStudent: Student = {
-      id: Math.max(...students.map((s) => s.id)) + 1,
-      name: formData.name,
-      class: formData.class,
-      nisn: formData.nisn,
-      email: formData.email,
-      phone: formData.phone,
-      address: formData.address,
-      parentName: formData.parentName,
-      parentPhone: formData.parentPhone,
-      attendance: {
-        present: 0,
-        sick: 0,
-        permission: 0,
-        absent: 0,
-      },
-      extracurricular: formData.extracurricular,
-    }
+    try {
+      // Insert student
+      const { data: studentData, error: studentError } = await supabase
+        .from('students')
+        .insert({
+          name: formData.name,
+          class: formData.class,
+          nisn: formData.nisn,
+          email: formData.email,
+          phone: formData.phone,
+          address: formData.address,
+        })
+        .select()
+        .single()
 
-    setStudents([...students, newStudent])
-    setIsAddDialogOpen(false)
-    resetForm()
-    alert("Siswa berhasil ditambahkan!")
+      if (studentError) throw studentError
+
+      // Add extracurricular activities
+      if (formData.extracurricular.length > 0) {
+        const { data: activitiesData } = await supabase
+          .from('extracurricular_activities')
+          .select('id, name')
+          .in('name', formData.extracurricular)
+
+        if (activitiesData) {
+          const studentActivities = activitiesData.map(activity => ({
+            student_id: studentData.id,
+            activity_id: activity.id
+          }))
+
+          await supabase
+            .from('student_extracurricular')
+            .insert(studentActivities)
+        }
+      }
+
+      await loadData()
+      setIsAddDialogOpen(false)
+      resetForm()
+      alert("Siswa berhasil ditambahkan!")
+    } catch (error) {
+      console.error('Error adding student:', error)
+      alert("Gagal menambahkan siswa")
+    }
   }
 
   const handleEditStudent = (student: Student) => {
@@ -245,7 +269,7 @@ export default function StudentsPage() {
     setIsEditDialogOpen(true)
   }
 
-  const handleUpdateStudent = () => {
+  const handleUpdateStudent = async () => {
     if (!formData.name || !formData.class || !formData.nisn) {
       alert("Mohon lengkapi data wajib (Nama, Kelas, NISN)")
       return
@@ -253,34 +277,74 @@ export default function StudentsPage() {
 
     if (!editingStudent) return
 
-    const updatedStudents = students.map((student) =>
-      student.id === editingStudent.id
-        ? {
-            ...student,
-            name: formData.name,
-            class: formData.class,
-            nisn: formData.nisn,
-            email: formData.email,
-            phone: formData.phone,
-            address: formData.address,
-            parentName: formData.parentName,
-            parentPhone: formData.parentPhone,
-            extracurricular: formData.extracurricular,
-          }
-        : student,
-    )
+    try {
+      // Update student
+      const { error: studentError } = await supabase
+        .from('students')
+        .update({
+          name: formData.name,
+          class: formData.class,
+          nisn: formData.nisn,
+          email: formData.email,
+          phone: formData.phone,
+          address: formData.address,
+        })
+        .eq('id', editingStudent.id)
 
-    setStudents(updatedStudents)
-    setIsEditDialogOpen(false)
-    setEditingStudent(null)
-    resetForm()
-    alert("Data siswa berhasil diperbarui!")
+      if (studentError) throw studentError
+
+      // Update extracurricular activities
+      // First, remove existing activities
+      await supabase
+        .from('student_extracurricular')
+        .delete()
+        .eq('student_id', editingStudent.id)
+
+      // Then add new activities
+      if (formData.extracurricular.length > 0) {
+        const { data: activitiesData } = await supabase
+          .from('extracurricular_activities')
+          .select('id, name')
+          .in('name', formData.extracurricular)
+
+        if (activitiesData) {
+          const studentActivities = activitiesData.map(activity => ({
+            student_id: editingStudent.id,
+            activity_id: activity.id
+          }))
+
+          await supabase
+            .from('student_extracurricular')
+            .insert(studentActivities)
+        }
+      }
+
+      await loadData()
+      setIsEditDialogOpen(false)
+      setEditingStudent(null)
+      resetForm()
+      alert("Data siswa berhasil diperbarui!")
+    } catch (error) {
+      console.error('Error updating student:', error)
+      alert("Gagal memperbarui data siswa")
+    }
   }
 
-  const handleDeleteStudent = (studentId: number) => {
-    const updatedStudents = students.filter((student) => student.id !== studentId)
-    setStudents(updatedStudents)
-    alert("Siswa berhasil dihapus!")
+  const handleDeleteStudent = async (studentId: number) => {
+    try {
+      const { error } = await supabase
+        .from('students')
+        .delete()
+        .eq('id', studentId)
+
+      if (error) throw error
+
+      await loadData()
+      alert("Siswa berhasil dihapus!")
+    } catch (error) {
+      console.error('Error deleting student:', error)
+      alert("Gagal menghapus siswa")
+    }
   }
 
   const handleExtracurricularChange = (activity: string, checked: boolean) => {

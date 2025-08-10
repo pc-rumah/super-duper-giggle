@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { CheckSquare, Clock, AlertCircle, CheckCircle } from "lucide-react"
+import { supabase } from "@/lib/supabase"
+import { getCurrentUser } from "@/lib/auth"
 
 interface ChecklistItem {
   id: string
@@ -66,18 +68,52 @@ const checklistItems: ChecklistItem[] = [
 export function ParentChecklist() {
   const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set())
   const [lastUpdated, setLastUpdated] = useState<string>("")
+  const [user, setUser] = useState<any>(null)
 
   useEffect(() => {
-    // Load saved checklist from localStorage
-    const saved = localStorage.getItem("parent-checklist")
-    if (saved) {
-      const data = JSON.parse(saved)
-      setCheckedItems(new Set(data.checkedItems))
-      setLastUpdated(data.lastUpdated)
+    const initializeChecklist = async () => {
+      const currentUser = await getCurrentUser()
+      if (!currentUser || currentUser.userType !== 'orangtua') return
+      
+      setUser(currentUser)
+      await loadChecklist(currentUser.id)
     }
+    
+    initializeChecklist()
   }, [])
 
-  const handleItemCheck = (itemId: string, checked: boolean) => {
+  const loadChecklist = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('parent_checklists')
+        .select('*')
+        .eq('parent_user_id', userId)
+
+      if (error) {
+        console.error('Error loading checklist:', error)
+        return
+      }
+
+      const checkedItemIds = data
+        .filter(item => item.is_checked)
+        .map(item => item.item_id)
+      
+      setCheckedItems(new Set(checkedItemIds))
+      
+      if (data.length > 0) {
+        const latestUpdate = data.reduce((latest, item) => 
+          new Date(item.last_updated) > new Date(latest) ? item.last_updated : latest
+        , data[0].last_updated)
+        setLastUpdated(latestUpdate)
+      }
+    } catch (error) {
+      console.error('Error loading checklist:', error)
+    }
+  }
+
+  const handleItemCheck = async (itemId: string, checked: boolean) => {
+    if (!user) return
+
     const newCheckedItems = new Set(checkedItems)
     if (checked) {
       newCheckedItems.add(itemId)
@@ -89,29 +125,32 @@ export function ParentChecklist() {
     const now = new Date().toISOString()
     setLastUpdated(now)
 
-    // Save to localStorage
-    const dataToSave = {
-      checkedItems: Array.from(newCheckedItems),
-      lastUpdated: now,
-      parentName: "Budi Santoso",
-      studentName: "Ahmad Rizki",
-      studentClass: "7A",
+    try {
+      // Upsert to Supabase
+      const { error } = await supabase
+        .from('parent_checklists')
+        .upsert({
+          parent_user_id: user.id,
+          item_id: itemId,
+          is_checked: checked,
+          last_updated: now
+        }, {
+          onConflict: 'parent_user_id,item_id'
+        })
+
+      if (error) {
+        console.error('Error saving checklist:', error)
+        // Revert the change if save failed
+        if (checked) {
+          newCheckedItems.delete(itemId)
+        } else {
+          newCheckedItems.add(itemId)
+        }
+        setCheckedItems(newCheckedItems)
+      }
+    } catch (error) {
+      console.error('Error saving checklist:', error)
     }
-    localStorage.setItem("parent-checklist", JSON.stringify(dataToSave))
-
-    // Also save to a global checklist for admin view
-    const existingGlobalData = localStorage.getItem("global-parent-checklist") || "[]"
-    const globalData = JSON.parse(existingGlobalData)
-
-    // Update or add this parent's data
-    const existingIndex = globalData.findIndex((item: any) => item.parentName === "Budi Santoso")
-    if (existingIndex >= 0) {
-      globalData[existingIndex] = dataToSave
-    } else {
-      globalData.push(dataToSave)
-    }
-
-    localStorage.setItem("global-parent-checklist", JSON.stringify(globalData))
   }
 
   const getCategoryIcon = (category: string) => {

@@ -22,6 +22,7 @@ import {
 import Link from "next/link"
 import { getCurrentUser } from "@/lib/auth"
 import { useRouter } from "next/navigation"
+import { supabase } from "@/lib/supabase"
 
 interface ParentChecklistData {
   parentName: string
@@ -76,55 +77,76 @@ export default function ParentChecklistRecap() {
   const [selectedCategory, setSelectedCategory] = useState("all")
   const [parentData, setParentData] = useState<ParentChecklistData[]>([])
   const [user, setUser] = useState<any>(null)
+  const [classes, setClasses] = useState<string[]>([])
   const router = useRouter()
 
-  const classes = ["7A", "7B", "7C", "8A", "8B", "8C", "9A", "9B", "9C"]
   const categories = ["akademik", "administrasi", "kegiatan"]
 
   useEffect(() => {
-    const currentUser = getCurrentUser()
-    if (!currentUser) {
-      router.push("/")
-      return
+    const initializePage = async () => {
+      const currentUser = await getCurrentUser()
+      if (!currentUser) {
+        router.push("/")
+        return
+      }
+      if (currentUser.userType !== "admin") {
+        router.push("/dashboard")
+        return
+      }
+      setUser(currentUser)
+      await loadParentData()
     }
-    if (currentUser.userType !== "admin") {
-      router.push("/dashboard")
-      return
-    }
-    setUser(currentUser)
-    loadParentData()
+    
+    initializePage()
   }, [router])
 
-  const loadParentData = () => {
-    const globalData = localStorage.getItem("global-parent-checklist")
-    if (globalData) {
-      setParentData(JSON.parse(globalData))
-    } else {
-      // Sample data for demonstration
-      const sampleData: ParentChecklistData[] = [
-        {
-          parentName: "Budi Santoso",
-          studentName: "Ahmad Rizki",
-          studentClass: "7A",
-          checkedItems: ["rapor-semester", "pembayaran-spp", "konsultasi-guru"],
-          lastUpdated: new Date().toISOString(),
-        },
-        {
-          parentName: "Siti Aminah",
-          studentName: "Siti Nurhaliza",
-          studentClass: "7A",
-          checkedItems: ["rapor-semester", "pembayaran-spp"],
-          lastUpdated: new Date(Date.now() - 86400000).toISOString(),
-        },
-        {
-          parentName: "Andi Wijaya",
-          studentName: "Budi Santoso",
-          studentClass: "7A",
-          checkedItems: ["rapor-semester"],
-          lastUpdated: new Date(Date.now() - 172800000).toISOString(),
-        },
-      ]
-      setParentData(sampleData)
+  const loadParentData = async () => {
+    try {
+      // Load parent checklist data with user and student information
+      const { data: checklistData, error: checklistError } = await supabase
+        .from('parent_checklists')
+        .select(`
+          *,
+          users!parent_checklists_parent_user_id_fkey(name),
+          students!inner(name, class)
+        `)
+
+      if (checklistError) throw checklistError
+
+      // Group by parent and aggregate data
+      const groupedData = (checklistData || []).reduce((acc, item: any) => {
+        const parentId = item.parent_user_id
+        if (!acc[parentId]) {
+          acc[parentId] = {
+            parentName: item.users.name,
+            studentName: item.students.name,
+            studentClass: item.students.class,
+            checkedItems: [],
+            lastUpdated: item.last_updated
+          }
+        }
+        
+        if (item.is_checked) {
+          acc[parentId].checkedItems.push(item.item_id)
+        }
+        
+        // Keep the latest update time
+        if (new Date(item.last_updated) > new Date(acc[parentId].lastUpdated)) {
+          acc[parentId].lastUpdated = item.last_updated
+        }
+        
+        return acc
+      }, {} as any)
+
+      const formattedData: ParentChecklistData[] = Object.values(groupedData)
+      setParentData(formattedData)
+
+      // Extract unique classes
+      const uniqueClasses = [...new Set(formattedData.map(d => d.studentClass))].sort()
+      setClasses(uniqueClasses)
+
+    } catch (error) {
+      console.error('Error loading parent data:', error)
     }
   }
 

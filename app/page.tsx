@@ -62,10 +62,9 @@ export default function HomePage() {
     setIsLoading(true)
 
     try {
-      const user = authenticateUser(username, password, userType)
+      const user = await authenticateUser(username, password, userType)
 
       if (user) {
-        localStorage.setItem("user", JSON.stringify(user))
         router.push("/dashboard")
       } else {
         alert("Username, password, atau tipe user tidak valid")

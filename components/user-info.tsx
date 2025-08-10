@@ -1,11 +1,20 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { getCurrentUser } from "@/lib/auth"
 import { Badge } from "@/components/ui/badge"
 import { User, GraduationCap, Users, Shield } from "lucide-react"
 
 export function UserInfo() {
-  const user = getCurrentUser()
+  const [user, setUser] = useState<any>(null)
+
+  useEffect(() => {
+    const loadUser = async () => {
+      const currentUser = await getCurrentUser()
+      setUser(currentUser)
+    }
+    loadUser()
+  }, [])
 
   if (!user) return null
 

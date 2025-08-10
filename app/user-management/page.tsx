@@ -32,6 +32,7 @@ import { GraduationCap, ArrowLeft, Search, UserPlus, Edit, Trash2, Eye, EyeOff, 
 import Link from "next/link"
 import { getCurrentUser } from "@/lib/auth"
 import { useRouter } from "next/navigation"
+import { supabase } from "@/lib/supabase"
 
 interface UserAccount {
   id: number
@@ -67,9 +68,9 @@ export default function UserManagement() {
   })
 
   const [user, setUser] = useState<any>(null)
+  const [classes, setClasses] = useState<string[]>([])
   const router = useRouter()
 
-  const classes = ["7A", "7B", "7C", "8A", "8B", "8C", "9A", "9B", "9C"]
   const userTypes = [
     { value: "siswa", label: "Siswa" },
     { value: "orangtua", label: "Orang Tua" },
@@ -78,64 +79,54 @@ export default function UserManagement() {
   ]
 
   useEffect(() => {
-    const currentUser = getCurrentUser()
-    if (!currentUser) {
-      router.push("/")
-      return
+    const initializePage = async () => {
+      const currentUser = await getCurrentUser()
+      if (!currentUser) {
+        router.push("/")
+        return
+      }
+      if (currentUser.userType !== "admin") {
+        router.push("/dashboard")
+        return
+      }
+      setUser(currentUser)
+      await loadUsers()
     }
-    if (currentUser.userType !== "admin") {
-      router.push("/dashboard")
-      return
-    }
-    setUser(currentUser)
-    loadUsers()
+    
+    initializePage()
   }, [router])
 
-  const loadUsers = () => {
-    const savedUsers = localStorage.getItem("system-users")
-    if (savedUsers) {
-      setUsers(JSON.parse(savedUsers))
-    } else {
-      // Sample data
-      const sampleUsers: UserAccount[] = [
-        {
-          id: 1,
-          username: "ahmad.rizki",
-          password: "siswa123",
-          userType: "siswa",
-          studentName: "Ahmad Rizki",
-          studentClass: "7A",
-          nisn: "1234567890",
-          isActive: true,
-          createdAt: new Date().toISOString(),
-          lastLogin: new Date().toISOString(),
-        },
-        {
-          id: 2,
-          username: "siti.nurhaliza",
-          password: "siswa456",
-          userType: "siswa",
-          studentName: "Siti Nurhaliza",
-          studentClass: "7A",
-          nisn: "1234567891",
-          isActive: true,
-          createdAt: new Date().toISOString(),
-        },
-        {
-          id: 3,
-          username: "budi.santoso.ortu",
-          password: "ortu123",
-          userType: "orangtua",
-          studentName: "Ahmad Rizki",
-          studentClass: "7A",
-          nisn: "1234567890",
-          parentName: "Budi Santoso",
-          isActive: true,
-          createdAt: new Date().toISOString(),
-        },
-      ]
-      setUsers(sampleUsers)
-      localStorage.setItem("system-users", JSON.stringify(sampleUsers))
+  const loadUsers = async () => {
+    try {
+      const { data: usersData, error: usersError } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (usersError) throw usersError
+
+      const formattedUsers: UserAccount[] = (usersData || []).map((user: any) => ({
+        id: user.id,
+        username: user.username,
+        password: user.password,
+        userType: user.user_type,
+        studentName: user.name,
+        studentClass: user.class || '',
+        nisn: user.nisn || '',
+        parentName: user.parent_name,
+        isActive: user.is_active,
+        createdAt: user.created_at,
+        lastLogin: user.last_login,
+      }))
+
+      setUsers(formattedUsers)
+
+      // Extract unique classes
+      const uniqueClasses = [...new Set(formattedUsers.map(u => u.studentClass).filter(Boolean))].sort()
+      setClasses(uniqueClasses)
+
+    } catch (error) {
+      console.error('Error loading users:', error)
     }
   }
 
@@ -170,37 +161,48 @@ export default function UserManagement() {
     setFormData((prev) => ({ ...prev, password }))
   }
 
-  const handleAddUser = () => {
+  const handleAddUser = async () => {
     if (!formData.username || !formData.password || !formData.studentName || !formData.studentClass) {
       alert("Mohon lengkapi data wajib")
       return
     }
 
-    // Check if username already exists
-    if (users.some((user) => user.username === formData.username)) {
-      alert("Username sudah digunakan")
-      return
-    }
+    try {
+      // Check if username already exists
+      const { data: existingUser } = await supabase
+        .from('users')
+        .select('id')
+        .eq('username', formData.username)
+        .single()
 
-    const newUser: UserAccount = {
-      id: Math.max(...users.map((u) => u.id), 0) + 1,
-      username: formData.username,
-      password: formData.password,
-      userType: formData.userType,
-      studentName: formData.studentName,
-      studentClass: formData.studentClass,
-      nisn: formData.nisn,
-      parentName: formData.parentName || undefined,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-    }
+      if (existingUser) {
+        alert("Username sudah digunakan")
+        return
+      }
 
-    const updatedUsers = [...users, newUser]
-    setUsers(updatedUsers)
-    localStorage.setItem("system-users", JSON.stringify(updatedUsers))
-    setIsAddDialogOpen(false)
-    resetForm()
-    alert("User berhasil ditambahkan!")
+      const { error } = await supabase
+        .from('users')
+        .insert({
+          username: formData.username,
+          password: formData.password,
+          user_type: formData.userType,
+          name: formData.studentName,
+          class: formData.studentClass,
+          nisn: formData.nisn || null,
+          parent_name: formData.parentName || null,
+          is_active: true,
+        })
+
+      if (error) throw error
+
+      await loadUsers()
+      setIsAddDialogOpen(false)
+      resetForm()
+      alert("User berhasil ditambahkan!")
+    } catch (error) {
+      console.error('Error adding user:', error)
+      alert("Gagal menambahkan user")
+    }
   }
 
   const handleEditUser = (user: UserAccount) => {
@@ -217,7 +219,7 @@ export default function UserManagement() {
     setIsEditDialogOpen(true)
   }
 
-  const handleUpdateUser = () => {
+  const handleUpdateUser = async () => {
     if (!formData.username || !formData.password || !formData.studentName || !formData.studentClass) {
       alert("Mohon lengkapi data wajib")
       return
@@ -225,46 +227,79 @@ export default function UserManagement() {
 
     if (!editingUser) return
 
-    // Check if username already exists (excluding current user)
-    if (users.some((user) => user.username === formData.username && user.id !== editingUser.id)) {
-      alert("Username sudah digunakan")
-      return
+    try {
+      // Check if username already exists (excluding current user)
+      const { data: existingUser } = await supabase
+        .from('users')
+        .select('id')
+        .eq('username', formData.username)
+        .neq('id', editingUser.id)
+        .single()
+
+      if (existingUser) {
+        alert("Username sudah digunakan")
+        return
+      }
+
+      const { error } = await supabase
+        .from('users')
+        .update({
+          username: formData.username,
+          password: formData.password,
+          user_type: formData.userType,
+          name: formData.studentName,
+          class: formData.studentClass,
+          nisn: formData.nisn || null,
+          parent_name: formData.parentName || null,
+        })
+        .eq('id', editingUser.id)
+
+      if (error) throw error
+
+      await loadUsers()
+      setIsEditDialogOpen(false)
+      setEditingUser(null)
+      resetForm()
+      alert("User berhasil diperbarui!")
+    } catch (error) {
+      console.error('Error updating user:', error)
+      alert("Gagal memperbarui user")
     }
-
-    const updatedUsers = users.map((user) =>
-      user.id === editingUser.id
-        ? {
-            ...user,
-            username: formData.username,
-            password: formData.password,
-            userType: formData.userType,
-            studentName: formData.studentName,
-            studentClass: formData.studentClass,
-            nisn: formData.nisn,
-            parentName: formData.parentName || undefined,
-          }
-        : user,
-    )
-
-    setUsers(updatedUsers)
-    localStorage.setItem("system-users", JSON.stringify(updatedUsers))
-    setIsEditDialogOpen(false)
-    setEditingUser(null)
-    resetForm()
-    alert("User berhasil diperbarui!")
   }
 
-  const handleDeleteUser = (userId: number) => {
-    const updatedUsers = users.filter((user) => user.id !== userId)
-    setUsers(updatedUsers)
-    localStorage.setItem("system-users", JSON.stringify(updatedUsers))
-    alert("User berhasil dihapus!")
+  const handleDeleteUser = async (userId: number) => {
+    try {
+      const { error } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', userId)
+
+      if (error) throw error
+
+      await loadUsers()
+      alert("User berhasil dihapus!")
+    } catch (error) {
+      console.error('Error deleting user:', error)
+      alert("Gagal menghapus user")
+    }
   }
 
-  const toggleUserStatus = (userId: number) => {
-    const updatedUsers = users.map((user) => (user.id === userId ? { ...user, isActive: !user.isActive } : user))
-    setUsers(updatedUsers)
-    localStorage.setItem("system-users", JSON.stringify(updatedUsers))
+  const toggleUserStatus = async (userId: number) => {
+    try {
+      const user = users.find(u => u.id === userId)
+      if (!user) return
+
+      const { error } = await supabase
+        .from('users')
+        .update({ is_active: !user.isActive })
+        .eq('id', userId)
+
+      if (error) throw error
+
+      await loadUsers()
+    } catch (error) {
+      console.error('Error toggling user status:', error)
+    }
   }
 
   const togglePasswordVisibility = (userId: number) => {

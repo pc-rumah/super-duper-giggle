@@ -1,4 +1,7 @@
+import { supabase } from './supabase'
+
 export interface User {
+  id: string
   username: string
   userType: "siswa" | "orangtua" | "guru" | "admin"
   loginTime: string
@@ -7,98 +10,104 @@ export interface User {
   studentId?: string
 }
 
-export const demoUsers = {
-  // Siswa
-  siswa123: {
-    password: "siswa123",
-    userType: "siswa" as const,
-    name: "Ahmad Rizki",
-    class: "7A",
-    studentId: "1234567890",
-  },
-  // Orang Tua
-  orangtua123: {
-    password: "orangtua123",
-    userType: "orangtua" as const,
-    name: "Budi Santoso",
-    studentName: "Ahmad Rizki",
-    studentClass: "7A",
-  },
-  // Guru
-  guru123: {
-    password: "guru123",
-    userType: "guru" as const,
-    name: "Siti Nurhaliza, S.Pd",
-    subject: "Matematika",
-  },
-  // Admin
-  admin123: {
-    password: "admin123",
-    userType: "admin" as const,
-    name: "Drs. H. Ahmad Suryadi, M.Pd",
-    position: "Kepala Sekolah",
-  },
-}
-
-export function getCurrentUser(): User | null {
+export async function getCurrentUser(): Promise<User | null> {
   if (typeof window === "undefined") return null
 
-  const userData = localStorage.getItem("user")
-  if (!userData) return null
-
   try {
-    return JSON.parse(userData)
-  } catch {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user) return null
+
+    const { data: userData, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', session.user.id)
+      .single()
+
+    if (error || !userData) return null
+
+    return {
+      id: userData.id,
+      username: userData.username,
+      userType: userData.user_type,
+      loginTime: session.user.created_at,
+      name: userData.name,
+      class: userData.class,
+      studentId: userData.nisn,
+    }
+  } catch (error) {
+    console.error('Error getting current user:', error)
     return null
   }
 }
 
-export function authenticateUser(username: string, password: string, userType: string): User | null {
-  // Check system users first
-  const systemUsers = localStorage.getItem("system-users")
-  if (systemUsers) {
-    const users = JSON.parse(systemUsers)
-    const user = users.find(
-      (u: any) => u.username === username && u.password === password && u.userType === userType && u.isActive,
-    )
+export async function authenticateUser(username: string, password: string, userType: string): Promise<User | null> {
+  try {
+    // First, find the user in our users table
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .eq('password', password) // In production, use proper password hashing
+      .eq('user_type', userType)
+      .eq('is_active', true)
+      .single()
 
-    if (user) {
-      // Update last login
-      const updatedUsers = users.map((u: any) => (u.id === user.id ? { ...u, lastLogin: new Date().toISOString() } : u))
-      localStorage.setItem("system-users", JSON.stringify(updatedUsers))
+    if (userError || !userData) {
+      console.error('Authentication failed:', userError)
+      return null
+    }
 
-      return {
-        username: user.username,
-        userType: user.userType,
-        loginTime: new Date().toISOString(),
-        name: user.studentName,
-        class: user.studentClass,
-        studentId: user.nisn,
+    // Create or sign in with Supabase Auth using the user ID as email
+    const email = `${userData.id}@academic.system`
+    
+    // Try to sign in first
+    let { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
+      email,
+      password: userData.id, // Use user ID as password for Supabase Auth
+    })
+
+    // If sign in fails, try to sign up
+    if (signInError) {
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password: userData.id,
+      })
+      
+      if (signUpError) {
+        console.error('Auth signup failed:', signUpError)
+        return null
       }
+      authData = signUpData
     }
-  }
 
-  // Fallback to demo users
-  const demoUserKey = username as keyof typeof demoUsers
-  const demoUser = demoUsers[demoUserKey]
+    if (!authData.user) return null
 
-  if (demoUser && demoUser.password === password && demoUser.userType === userType) {
+    // Update last login
+    await supabase
+      .from('users')
+      .update({ last_login: new Date().toISOString() })
+      .eq('id', userData.id)
+
     return {
-      username,
-      userType: demoUser.userType,
+      id: userData.id,
+      username: userData.username,
+      userType: userData.user_type,
       loginTime: new Date().toISOString(),
-      name: demoUser.name,
-      class: "class" in demoUser ? demoUser.class : undefined,
-      studentId: "studentId" in demoUser ? demoUser.studentId : undefined,
+      name: userData.name,
+      class: userData.class,
+      studentId: userData.nisn,
     }
+  } catch (error) {
+    console.error('Authentication error:', error)
+    return null
   }
-
-  return null
 }
 
-export function logout() {
-  if (typeof window !== "undefined") {
-    localStorage.removeItem("user")
+export async function logout() {
+  try {
+    await supabase.auth.signOut()
+  } catch (error) {
+    console.error('Logout error:', error)
   }
 }
 
