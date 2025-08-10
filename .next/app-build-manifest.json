@@ -20,6 +20,16 @@
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/login-demo/page.js"
+    ],
+    "/grades/uts-uas/loading": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/grades/uts-uas/loading.js"
+    ],
+    "/grades/uts-uas/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/grades/uts-uas/page.js"
     ]
   }
 }
